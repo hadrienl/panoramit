@@ -37,6 +37,7 @@ Chaudron.prototype = {
      */
     mix: function(callback)
     {
+        console.log('start mix', new Date().toString());
         this._end = function()
         {
             /**
@@ -44,6 +45,7 @@ Chaudron.prototype = {
              */
             this._client && this._client.end();
             callback && callback();
+            console.log('end mix', new Date().toString());
 
         }.bind(this)
 
@@ -168,7 +170,7 @@ Chaudron.prototype = {
      */
     _makeTiles: function(task)
     {
-        var cmd = 'imgcnv -i ./tmp/'+task.id+'/original.jpg -o ./tmp/'+task.id+'/tile.jpg -t jpeg -tile 256 -options "quality 90"';
+        var cmd = 'imgcnv -i ./tmp/'+task.id+'/original.jpg -o ./tmp/'+task.id+'/tile.jpg -t jpeg -tile 256 -options "quality 75"';
 
         exec(cmd, function(err, stdout, stderr)
         {
@@ -176,7 +178,7 @@ Chaudron.prototype = {
              * Command will always return an error :/
              * But ! If everything is working fine, command will not be killed
              */
-            if (err.killed)
+            if (err.code === 137)
             {
                 console.error('error!!! Not enough RAM');
                 return this._end();
@@ -192,72 +194,46 @@ Chaudron.prototype = {
      */
     _uploadTiles: function(task)
     {
-        var path = './tmp/'+task.id+'/';
+        var path = './tmp/'+task.id+'/',
+            /**
+             * List tiles files
+             */
+            files = fs.readdirSync(path),
 
-        /**
-         * List tiles files
-         */
-        fs.readdir(
-            path,
-            function(err, files)
+            s3 = new AWS.S3(),
+
+            next = function()
             {
-                /**
-                 * Get number of files to transfer
-                 */
-                var nbfiles = 0;
+                var file = files[0];
 
-                files.forEach(function(file)
+                data = fs.readFileSync(path+file);
+
+                s3.putObject({
+                    Bucket: 'panoramit',
+                    Key: task.id+'/'+file,
+                    Body: data,
+                    ACL: 'public-read'
+                }, function(err, data)
                 {
-                    if (file.match(/^tile_*/))
+                    if (err)
                     {
-                        nbfiles++;
+                        console.error(err);
+                        return this._end();
                     }
-                });
 
-                /**
-                 * Loop on each files
-                 */
-                files.forEach(function(file)
-                {
-                    if (file.match(/^tile_*/))
+                    files.shift();
+
+                    if (!files.length)
                     {
-                        fs.readFile(
-                            path+file,
-                            function(err, data)
-                            {
-                                var s3 = new AWS.S3();
-                                s3.putObject({
-                                    Bucket: 'panoramit',
-                                    Key: task.id+'/'+file,
-                                    Body: data
-                                }, function(err, data)
-                                {
-                                    if (err)
-                                    {
-                                        console.error(err);
-                                        return this._end();
-                                    }
-
-                                    /**
-                                     * Decrase number of pending files
-                                     */
-                                    nbfiles--;
-
-                                    /**
-                                     * Check numner of pending files
-                                     */
-                                    if (nbfiles === 0)
-                                    {
-                                        this._validate(task);
-                                    }
-
-                                }.bind(this));
-                            }.bind(this)
-                        );
+                        return this._validate(task);
                     }
+
+                    next();
+
                 }.bind(this));
-            }.bind(this)
-        );
+            }.bind(this);
+
+        next();
     },
 
     /**
