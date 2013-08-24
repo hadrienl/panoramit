@@ -1,5 +1,8 @@
 var pg = require('pg'),
     AWS = require('aws-sdk'),
+    http = require('http'),
+    fs = require('fs'),
+    exec = require('child_process').exec,
     Chaudron = function(config)
     {
         this.init(config);
@@ -36,6 +39,9 @@ Chaudron.prototype = {
     {
         this._end = function()
         {
+            /**
+             * TODO rm tmp dir
+             */
             this._client && this._client.end();
             callback && callback();
 
@@ -113,20 +119,171 @@ Chaudron.prototype = {
      */
     _retreiveOriginal: function(task)
     {
-        var s3 = new AWS.S3();
+        /**
+         * Start by create tmp directory
+         */
+        fs.mkdir(
+            './tmp/'+task.id,
+            function(err)
+            {
+                /**
+                 * Download original file from http
+                 */
+                var originalurl = 'http://panoramit.s3.amazonaws.com/'+task.id+'/original.jpg',
+                    request = http.get(originalurl, function(res)
+                    {
+                        var imagedata = ''
+                        res.setEncoding('binary')
 
-        s3.createBucket({Bucket: 'myBucket'}, function() {
-        
-        var s3 = new AWS.S3();
-        var params = {Bucket: 'panoramit', Key: task.id+'/original.jpg'};
-        var file = require('fs').createWriteStream('./tmp/original.jpg');
-        //s3.on
-        s3.getObject(params, function(err, data)
+                        res.on('data', function(chunk)
+                        {
+                            imagedata += chunk
+                        })
+
+                        res.on('end', function()
+                        {
+                            /**
+                             * Write file on tmp filesystem
+                             */
+                            fs.writeFile('./tmp/'+task.id+'/original.jpg', imagedata, 'binary', function(err)
+                            {
+                                if (err)
+                                {
+                                    console.error('can\'t save file');
+                                    return this._end();
+                                }
+                                
+                                this._makeTiles(task);
+                            }.bind(this))
+
+                        }.bind(this));
+
+                    }.bind(this));
+            }.bind(this)
+        );
+    },
+
+    /**
+     * Exec the imgcnv command to make tiles files
+     */
+    _makeTiles: function(task)
+    {
+        var cmd = 'imgcnv -i ./tmp/'+task.id+'/original.jpg -o ./tmp/'+task.id+'/tile.jpg -t jpeg -tile 256 -options "quality 90"';
+
+        exec(cmd, function(err, stdout, stderr)
         {
-            console.warn(err, data);
+            /**
+             * Command will always return an error :/
+             * But ! If everything is working fine, command will not be killed
+             */
+            if (err.killed)
+            {
+                console.error('error!!! Not enough RAM');
+                return this._end();
+            }
+
+            this._uploadTiles(task);
+
+        }.bind(this));
+    },
+
+    /**
+     * Upload tiles to S3
+     */
+    _uploadTiles: function(task)
+    {
+        var path = './tmp/'+task.id+'/';
+
+        /**
+         * List tiles files
+         */
+        fs.readdir(
+            path,
+            function(err, files)
+            {
+                /**
+                 * Get number of files to transfer
+                 */
+                var nbfiles = 0;
+
+                files.forEach(function(file)
+                {
+                    if (file.match(/^tile_*/))
+                    {
+                        nbfiles++;
+                    }
+                });
+
+                /**
+                 * Loop on each files
+                 */
+                files.forEach(function(file)
+                {
+                    if (file.match(/^tile_*/))
+                    {
+                        fs.readFile(
+                            path+file,
+                            function(err, data)
+                            {
+                                var s3 = new AWS.S3();
+                                s3.putObject({
+                                    Bucket: 'panoramit',
+                                    Key: task.id+'/'+file,
+                                    Body: data
+                                }, function(err, data)
+                                {
+                                    if (err)
+                                    {
+                                        console.error(err);
+                                        return this._end();
+                                    }
+
+                                    /**
+                                     * Decrase number of pending files
+                                     */
+                                    nbfiles--;
+
+                                    /**
+                                     * Check numner of pending files
+                                     */
+                                    if (nbfiles === 0)
+                                    {
+                                        this._validate(task);
+                                    }
+
+                                }.bind(this));
+                            }.bind(this)
+                        );
+                    }
+                }.bind(this));
+            }.bind(this)
+        );
+    },
+
+    /**
+     * Set task as validated
+     */
+    _validate: function(task)
+    {
+        console.warn('Validating task #'+task.id);
+
+        /**
+         * Update panorama status to Valid
+         */
+        this._client.query('UPDATE panoramas SET status = 3 WHERE id = '+task.id, function(err, result)
+        {
+            if (err)
+            {
+                console.error('error running query', err);
+                return this._end();
+            }
+
+            /**
+             * End task
+             */
             this._end();
-        }.bind(this)).createReadStream().pipe(file);
-});
+
+        }.bind(this));
     }
 }
 
