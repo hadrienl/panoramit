@@ -37,7 +37,6 @@ Chaudron.prototype = {
      */
     mix: function(callback)
     {
-        console.log('start mix', new Date().toString());
         this._end = function()
         {
             /**
@@ -45,7 +44,6 @@ Chaudron.prototype = {
              */
             this._client && this._client.end();
             callback && callback();
-            console.log('end mix', new Date().toString());
 
         }.bind(this)
 
@@ -87,7 +85,7 @@ Chaudron.prototype = {
 
             if (!result.rows.length)
             {
-                console.error('No task');
+                // No task
                 return this._end();
             }
 
@@ -101,7 +99,7 @@ Chaudron.prototype = {
      */
     _process: function(task)
     {
-        console.warn("Processing task #"+task.id);
+        console.warn("Processing task #"+task.id+' ('+new Date().toString()+')');
 
         this._client.query('UPDATE panoramas SET status = 2 WHERE id = '+task.id, function(err, result)
         {
@@ -241,7 +239,7 @@ Chaudron.prototype = {
      */
     _validate: function(task)
     {
-        console.warn('Validating task #'+task.id);
+        console.warn('Validating task #'+task.id+' ('+new Date().toString()+')');
 
         /**
          * Update panorama status to Valid
